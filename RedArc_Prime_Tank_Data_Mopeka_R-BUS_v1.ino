@@ -6,9 +6,10 @@
  * immediately re-transmits an overriding frame with our own values —
  * no separate device identity, no channel-table config, minimal
  * traffic.
- *
+ * ------------------------------------------------------------------
+ * 
  * WIRING
- * ------
+ *
  * ESP32 to SN65HVD230
  *    GPIO19 -> CANTX (CTX)
  *    GPIO22 -> SCLCANRX (CRX)
@@ -51,18 +52,18 @@
 // =================================================================
 struct TankConfig {
   const char* mac;             // lowercase MAC from mopeka_mac_scanner.ino, or "" for no sensor
-  float empty_mm;              // Mopeka-measured height at empty
-  float full_mm;               // Mopeka-measured height at full
+  float empty_mm;               // Mopeka-measured height at empty
+  float full_mm;                 // Mopeka-measured height at full
   uint8_t fallback_percent;    // used only while mac == "" (no sensor configured)
 };
 
 static TankConfig TANKS[6] = {
-  /* Tank 1 */ { "", 0.0, 290.0, 0 },
-  /* Tank 2 */ { "", 0.0, 290.0, 0 },
-  /* Tank 3 */ { "", 0.0, 290.0, 0 },
-  /* Tank 4 */ { "", 0.0, 290.0, 0 },
-  /* Tank 5 */ { "", 0.0, 290.0, 0 },
-  /* Tank 6 */ { "", 0.0, 290.0, 0 },
+  /* Tank 1 */ { "c7:48:ac:d9:f9:85", 0.0, 290.0, 0 },
+  /* Tank 2 */ { "", 0.0, 370.0, 0 },
+  /* Tank 3 */ { "", 0.0, 370.0, 0 },
+  /* Tank 4 */ { "", 0.0, 370.0, 0 },
+  /* Tank 5 */ { "", 0.0, 370.0, 0 },
+  /* Tank 6 */ { "", 0.0, 370.0, 0 },
 };
 
 #define TANK_POLL_INTERVAL_MS 15000   // how often to wake BLE and poll
@@ -104,9 +105,34 @@ void sendTankFrame(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
   }
 }
 
-void sendTank14() { sendTankFrame(0x14, 0xFF, 0xFF, tankPercent[0], 0x00, tankPercent[1], 0x00, 0xFF); }
-void sendTank17() { sendTankFrame(0x17, tankPercent[2], 0x00, tankPercent[3], 0x00, tankPercent[4], 0x00, 0xFF); }
-void sendTank1A() { sendTankFrame(0x1A, tankPercent[5], 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF); }
+// IMPORTANT: these patch ONLY the tank byte(s) of whatever the real
+// TVMS just sent, preserving every other byte exactly as received.
+// D2-D3 on page 0x14 is Temperature 1, NOT unused padding — hardcoding
+// it to 0xFF (as an earlier version of this sketch did) would silently
+// overwrite a real temperature reading with "sensor unavailable" every
+// time a tank override fires. Copy-then-patch avoids ever guessing at
+// what the "other" bytes on a page mean.
+void sendTank14(const uint8_t* original) {
+  uint8_t d[8];
+  memcpy(d, original, 8);
+  d[3] = tankPercent[0]; // D4 = Tank1
+  d[5] = tankPercent[1]; // D6 = Tank2
+  sendTankFrame(d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+}
+void sendTank17(const uint8_t* original) {
+  uint8_t d[8];
+  memcpy(d, original, 8);
+  d[1] = tankPercent[2]; // D2 = Tank3
+  d[3] = tankPercent[3]; // D4 = Tank4
+  d[5] = tankPercent[4]; // D6 = Tank5
+  sendTankFrame(d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+}
+void sendTank1A(const uint8_t* original) {
+  uint8_t d[8];
+  memcpy(d, original, 8);
+  d[1] = tankPercent[5]; // D2 = Tank6
+  sendTankFrame(d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+}
 
 // ---------------------------------------------------------------
 // Mopeka BLE decoding
@@ -203,9 +229,9 @@ void canTask(void* pvParameters)
 
     switch (message.data[0])
     {
-      case 0x14: sendTank14(); break;
-      case 0x17: sendTank17(); break;
-      case 0x1A: sendTank1A(); break;
+      case 0x14: sendTank14(message.data); break;
+      case 0x17: sendTank17(message.data); break;
+      case 0x1A: sendTank1A(message.data); break;
       default: continue;
     }
 
